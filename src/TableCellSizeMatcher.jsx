@@ -4,7 +4,7 @@ Script-ID=com.gyahtei.dtp.table-cell-size-matcher.indesign
 Version=1.0.0
 Meta-URL=https://github.com/SatoruTakahashi7/InDesign-Table-Tools
 Target-App=indesign
-Name=表セルのサイズとかを別セルへ適用するやつ / Table Cell Size Matcher
+Name=表のセルのサイズとかを別セルへ適用するやつ / Table Cell Size Matcher
 Author=GYAHTEI Design Laboratory / Satoru Takahashi
 Description-BEGIN
 InDesignの表セルから、幅・高さ・セル内マージン・上下位置揃えを拾い、別のセルへ適用する補助スクリプトです。
@@ -14,7 +14,7 @@ SCRIPTMETA-END
 
 
     TableCellSizeMatcher.jsx
-    表セルのサイズとかを別セルへ適用するやつ.jsx
+    表のセルのサイズとかを別セルへ適用するやつ.jsx
     Version: 1.0.0
     Updated: 2026-05-04
     GYAHTEI Design Laboratory
@@ -80,7 +80,7 @@ SCRIPTMETA-END
 #targetengine "GYAHTEI_TableCellSizeMatcher"
 
 (function () {
-    var SCRIPT_TITLE = "表セルのサイズとかをそろえるやつ";
+    var SCRIPT_TITLE = "表のセルのサイズとかを別セルへ適用するやつ";
     var PALETTE_NAME = "TableCellSizeMatcherPalette";
     var SETTINGS_FILE_NAME = "GYAHTEI_TableCellSizeMatcher_Settings.txt";
 

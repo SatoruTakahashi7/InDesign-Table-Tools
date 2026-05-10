@@ -4,7 +4,7 @@ Script-ID=com.gyahtei.dtp.table-column-width-panel.indesign
 Version=1.0.0
 Meta-URL=https://github.com/SatoruTakahashi7/InDesign-Table-Tools
 Target-App=indesign
-Name=表組の列幅を変えるやつ / Table Column Width Panel
+Name=表の列幅を変えるやつ / Table Column Width Panel
 Author=GYAHTEI Design Laboratory / Satoru Takahashi
 Description-BEGIN
 InDesignの表組の列幅を、パネルUIからmm指定・fill指定・プリセット保存で変更する補助スクリプトです。
@@ -112,7 +112,7 @@ SCRIPTMETA-END
         var tableWidthMm = pointsToMillimeters(snapshot.tableWidthPt);
         for (var i = 0; i < columnCount; i++) currentWidthsMm.push(pointsToMillimeters(snapshot.columnWidthsPt[i]));
 
-        var dlg = new Window("dialog", "表の列幅を設定");
+        var dlg = new Window("dialog", "表の列幅を変えるやつ");
         dlg.orientation = "column";
         dlg.alignChildren = ["fill", "top"];
 
