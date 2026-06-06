@@ -4,14 +4,14 @@
 /*
 SCRIPTMETA-BEGIN
 Script-ID=com.gyahtei.dtp.table-line-helper.indesign
-Version=1.0.0
+Version=1.0.1
 Meta-URL=https://github.com/SatoruTakahashi7/InDesign-Table-Tools
 Target-App=indesign
 Name=表組の罫線をいじるやつ / Table Line Helper
 Author=GYAHTEI Design Laboratory / Satoru Takahashi
 Description-BEGIN
 InDesignの表セル罫線操作を補助するスクリプトです。
-全体・外枠・内部・個別線を、見やすいUIで選択し、線幅・線種・スウォッチ色を指定して適用できます。
+全体・外枠・内部・個別線を、見やすいUIで選択し、線幅・線種・スウォッチを指定して適用できます。
 Description-END
 SCRIPTMETA-END
 
@@ -19,8 +19,8 @@ SCRIPTMETA-END
     TableLineHelper.jsx
     Japanese name: 表組の罫線をいじるやつ.jsx
 
-    Version: 1.0.0
-    Updated: 2026-05-03
+    Version: 1.0.1
+    Updated: 2026-06-06
     GYAHTEI Design Laboratory
     @gyahtei_satoru
     Developed with ChatGPT
@@ -135,6 +135,8 @@ SCRIPTMETA-END
     注意:
     - 結果に関しては一切の保証はできません。
     - 本スクリプトの読み取り結果および使用結果について、正確性・完全性は保証できません。
+
+    Thanks Ryu-chang　@baptize_Ryuji
 */
 
 (function () {
@@ -1640,6 +1642,8 @@ SCRIPTMETA-END
         }
 
         function toggleNearestGridLine(ev) {
+            primeNumpadFocusAfterReturn(ev, true);
+
             var geo = getGridGeometry(gridPreview);
             var x = 0;
             var y = 0;
@@ -1670,8 +1674,9 @@ SCRIPTMETA-END
             if (candidates[0].name === "right") rightChk.value = !rightChk.value;
             if (candidates[0].name === "innerH") innerHChk.value = !innerHChk.value;
             if (candidates[0].name === "innerV") innerVChk.value = !innerVChk.value;
-            setManualMode();
+            setManualMode(false);
             syncGridButtons();
+            primeNumpadFocusAfterReturn(null, true);
         }
 
         try {
@@ -1820,11 +1825,153 @@ SCRIPTMETA-END
         attachCursorIncrement(innerEt, getCurrentUnit);
 
         var numericFieldActive = false;
+        var numericFieldTypingUntil = 0;
+        var lastPaletteReturnResetAt = 0;
+
+        function nowTime() {
+            try { return (new Date()).getTime(); } catch (_) {}
+            return 0;
+        }
+
+        function markNumericFieldTyping() {
+            numericFieldTypingUntil = nowTime() + 450;
+        }
+
+        function releaseNumericFieldFocus() {
+            numericFieldActive = false;
+            numericFieldTypingUntil = 0;
+        }
+
+        function releaseNumericFieldFocusSoon() {
+            releaseNumericFieldFocus();
+            primeNumpadFocusAfterReturn(null, true);
+        }
+
+        function resetFocusAfterNumericField() {
+            try {
+                var wasManual = rbModeManual.value;
+                rbModeQuick.value = true;
+                rbModeManual.value = false;
+                rbModeQuick.active = true;
+
+                if (wasManual) {
+                    $.global.__TLH_restoreManualModeAfterFocusReset = function () {
+                        try {
+                            rbModeManual.value = true;
+                            rbModeQuick.value = false;
+                            focusKeyCatcher(true);
+                        } catch (_) {}
+                    };
+                    try {
+                        app.scheduleTask('$.global.__TLH_restoreManualModeAfterFocusReset && $.global.__TLH_restoreManualModeAfterFocusReset();', 80, false);
+                    } catch (_) {
+                        $.global.__TLH_restoreManualModeAfterFocusReset();
+                    }
+                }
+            } catch (_) {}
+        }
+
+        function resetFocusAfterPaletteReturn(ev, force) {
+            try {
+                if (ev) {
+                    try { if (isNumericFieldTarget(ev.target)) return; } catch (_) {}
+                    try { if (isNumericFieldTarget(ev.currentTarget)) return; } catch (_) {}
+                }
+
+                if (isNumericFieldActuallyActive()) return;
+
+                var t = nowTime();
+                if (!force && t - lastPaletteReturnResetAt < 350) return;
+                lastPaletteReturnResetAt = t;
+
+                forceQuickModeForNextNumpad();
+            } catch (_) {}
+        }
+
+        function schedulePaletteReturnResetBurst() {
+            try {
+                $.global.__TLH_resetFocusAfterPaletteReturn = resetFocusAfterPaletteReturn;
+                app.scheduleTask('$.global.__TLH_resetFocusAfterPaletteReturn && $.global.__TLH_resetFocusAfterPaletteReturn(null, true);', 40, false);
+                app.scheduleTask('$.global.__TLH_resetFocusAfterPaletteReturn && $.global.__TLH_resetFocusAfterPaletteReturn(null, true);', 160, false);
+                app.scheduleTask('$.global.__TLH_resetFocusAfterPaletteReturn && $.global.__TLH_resetFocusAfterPaletteReturn(null, true);', 360, false);
+                app.scheduleTask('$.global.__TLH_resetFocusAfterPaletteReturn && $.global.__TLH_resetFocusAfterPaletteReturn(null, true);', 720, false);
+            } catch (_) {
+                resetFocusAfterPaletteReturn(null, true);
+            }
+        }
+
+        function forceQuickModeForNextNumpad() {
+            try {
+                releaseNumericFieldFocus();
+                rbModeQuick.value = true;
+                rbModeManual.value = false;
+                rbModeQuick.active = true;
+                syncPreviewFromQuickSelection();
+                startKeyPolling();
+                focusKeyCatcher(true);
+                refocusKeyCatcherSoon(true);
+
+                try {
+                    app.scheduleTask('$.global.__TLH_keyPoll && $.global.__TLH_keyPoll();', 120, false);
+                    app.scheduleTask('$.global.__TLH_refocusKeyCatcher && $.global.__TLH_refocusKeyCatcher(true);', 180, false);
+                    app.scheduleTask('$.global.__TLH_refocusKeyCatcher && $.global.__TLH_refocusKeyCatcher(true);', 360, false);
+                } catch (_) {}
+            } catch (_) {}
+        }
+
+        function primeNumpadFocusAfterReturn(ev, force) {
+            try {
+                if (ev) {
+                    try { if (isNumericFieldTarget(ev.target)) return; } catch (_) {}
+                    try { if (isNumericFieldTarget(ev.currentTarget)) return; } catch (_) {}
+                }
+                if (isNumericFieldActuallyActive() && !force) return;
+
+                releaseNumericFieldFocus();
+                resetFocusAfterNumericField();
+                startKeyPolling();
+                focusKeyCatcher(true);
+                refocusKeyCatcherSoon(true);
+
+                try {
+                    app.scheduleTask('$.global.__TLH_resetFocusAfterNumericField && $.global.__TLH_resetFocusAfterNumericField();', 80, false);
+                    app.scheduleTask('$.global.__TLH_keyPoll && $.global.__TLH_keyPoll();', 120, false);
+                    app.scheduleTask('$.global.__TLH_refocusKeyCatcher && $.global.__TLH_refocusKeyCatcher(true);', 180, false);
+                    app.scheduleTask('$.global.__TLH_refocusKeyCatcher && $.global.__TLH_refocusKeyCatcher(true);', 360, false);
+                    app.scheduleTask('$.global.__TLH_refocusKeyCatcher && $.global.__TLH_refocusKeyCatcher(true);', 700, false);
+                } catch (_) {}
+            } catch (_) {}
+        }
+
+        try {
+            $.global.__TLH_releaseNumericFieldFocus = releaseNumericFieldFocusSoon;
+            $.global.__TLH_resetFocusAfterNumericField = resetFocusAfterNumericField;
+            $.global.__TLH_resetFocusAfterPaletteReturn = resetFocusAfterPaletteReturn;
+            $.global.__TLH_schedulePaletteReturnResetBurst = schedulePaletteReturnResetBurst;
+            $.global.__TLH_primeNumpadFocusAfterReturn = primeNumpadFocusAfterReturn;
+            $.global.__TLH_forceQuickModeForNextNumpad = forceQuickModeForNextNumpad;
+        } catch (_) {}
 
         function markNumericField(et) {
             try {
-                et.onActivate = function () { numericFieldActive = true; };
-                et.onDeactivate = function () { numericFieldActive = false; };
+                et.onActivate = function () { numericFieldActive = true; markNumericFieldTyping(); };
+                et.onDeactivate = releaseNumericFieldFocusSoon;
+            } catch (_) {}
+
+            try {
+                et.addEventListener("keydown", function (ev) {
+                    markNumericFieldTyping();
+                    var key = "";
+                    try { key = ev.keyName || ev.keyIdentifier || ev.key || ""; } catch (_) {}
+                    key = String(key);
+                    if (key === "Enter" || key === "Return" || key === "Tab" || key === "Escape") {
+                        try {
+                            app.scheduleTask('$.global.__TLH_releaseNumericFieldFocus && $.global.__TLH_releaseNumericFieldFocus();', 30, false);
+                        } catch (_) {
+                            releaseNumericFieldFocusSoon();
+                        }
+                    }
+                });
             } catch (_) {}
         }
 
@@ -1832,9 +1979,9 @@ SCRIPTMETA-END
         markNumericField(outerEt);
         markNumericField(innerEt);
 
-        weightEt.onChange = function () { normalizeNumberField(weightEt); updateWeightDropdownsAndUnitLabels(); };
-        outerEt.onChange = function () { normalizeNumberField(outerEt); updateWeightDropdownsAndUnitLabels(); };
-        innerEt.onChange = function () { normalizeNumberField(innerEt); updateWeightDropdownsAndUnitLabels(); };
+        weightEt.onChange = function () { normalizeNumberField(weightEt); updateWeightDropdownsAndUnitLabels(); releaseNumericFieldFocusSoon(); };
+        outerEt.onChange = function () { normalizeNumberField(outerEt); updateWeightDropdownsAndUnitLabels(); releaseNumericFieldFocusSoon(); };
+        innerEt.onChange = function () { normalizeNumberField(innerEt); updateWeightDropdownsAndUnitLabels(); releaseNumericFieldFocusSoon(); };
 
         function updateWeightDropdownsAndUnitLabels() {
             var unit = getCurrentUnit();
@@ -1898,17 +2045,21 @@ SCRIPTMETA-END
             updateWeightDropdownsAndUnitLabels();
         };
 
-        function setManualMode() {
+        function setManualMode(strongRefocus) {
+            releaseNumericFieldFocus();
             rbModeManual.value = true;
             rbModeQuick.value = false;
-            refocusKeyCatcherSoon();
+            refocusKeyCatcherSoon(true);
+            if (strongRefocus) primeNumpadFocusAfterReturn(null, true);
         }
 
         function setQuickModeUI() {
+            releaseNumericFieldFocus();
             rbModeQuick.value = true;
             rbModeManual.value = false;
             syncPreviewFromQuickSelection();
-            refocusKeyCatcherSoon();
+            refocusKeyCatcherSoon(true);
+            forceQuickModeForNextNumpad();
         }
 
         function toggleLineCheck(chk) {
@@ -1929,6 +2080,27 @@ SCRIPTMETA-END
                 if (!target) return false;
                 if (String(target.type).toLowerCase() === "edittext") return true;
             } catch (_) {}
+            return false;
+        }
+
+        function isKeyCatcherTarget(target) {
+            try {
+                return target === keyCatcher;
+            } catch (_) {}
+            return false;
+        }
+
+        function isNumericFieldTarget(target) {
+            try {
+                return target === weightEt || target === outerEt || target === innerEt;
+            } catch (_) {}
+            return false;
+        }
+
+        function isNumericFieldActuallyActive() {
+            try { if (weightEt && weightEt.active) return true; } catch (_) {}
+            try { if (outerEt && outerEt.active) return true; } catch (_) {}
+            try { if (innerEt && innerEt.active) return true; } catch (_) {}
             return false;
         }
 
@@ -1962,6 +2134,16 @@ SCRIPTMETA-END
             if (/^[0-9]$/.test(key)) return key;
 
             var lower = key.toLowerCase();
+            if (lower === "up" || lower === "arrowup") return "8";
+            if (lower === "down" || lower === "arrowdown") return "2";
+            if (lower === "left" || lower === "arrowleft") return "4";
+            if (lower === "right" || lower === "arrowright") return "6";
+            if (lower === "home") return "7";
+            if (lower === "pageup" || lower === "prior") return "9";
+            if (lower === "end") return "1";
+            if (lower === "pagedown" || lower === "next") return "3";
+            if (lower === "insert" || lower === "ins") return "0";
+            if (lower === "delete" || lower === "del") return ".";
             if (lower === "decimal" || lower === "period" || lower === "dot" || lower === "separator") return ".";
             if (lower === "clear") return "0";
 
@@ -1982,6 +2164,17 @@ SCRIPTMETA-END
                     if (ev.keyCode >= 96 && ev.keyCode <= 105) return String(ev.keyCode - 96);
                     // テンキー decimal
                     if (ev.keyCode === 110 || ev.keyCode === 190) return ".";
+                    // NumLock オフ時など、テンキーがナビゲーションキーとして届く場合
+                    if (ev.keyCode === 38) return "8";
+                    if (ev.keyCode === 40) return "2";
+                    if (ev.keyCode === 37) return "4";
+                    if (ev.keyCode === 39) return "6";
+                    if (ev.keyCode === 36) return "7";
+                    if (ev.keyCode === 33) return "9";
+                    if (ev.keyCode === 35) return "1";
+                    if (ev.keyCode === 34) return "3";
+                    if (ev.keyCode === 45) return "0";
+                    if (ev.keyCode === 46) return ".";
                 }
             } catch (_) {}
 
@@ -2005,7 +2198,7 @@ SCRIPTMETA-END
             else { handled = false; }
 
             if (handled) {
-                setManualMode();
+                setManualMode(false);
                 syncGridButtons();
                 return true;
             }
@@ -2014,15 +2207,24 @@ SCRIPTMETA-END
 
         function handleNumpadLineSelection(ev) {
             // 物理テンキーのキーイベントは環境差が大きい。拾えた場合だけ処理する。
+            try {
+                if (isNumericFieldTarget(ev.target)) return true;
+            } catch (_) {}
+            try {
+                if (isNumericFieldTarget(ev.currentTarget)) return true;
+            } catch (_) {}
+
             var key = normalizeNumpadKey(ev);
             if (applyNumpadSelectionKey(key)) {
                 try { ev.preventDefault(); } catch (_) {}
+                try { ev.stopPropagation(); } catch (_) {}
                 return false;
             }
         }
 
-        function focusKeyCatcher() {
+        function focusKeyCatcher(force) {
             try {
+                if (isNumericFieldActuallyActive() && !force) return;
                 if (keyCatcher && keyCatcher.visible) {
                     keyCatcher.text = "";
                     keyCatcher.active = true;
@@ -2030,12 +2232,13 @@ SCRIPTMETA-END
             } catch (_) {}
         }
 
-        function refocusKeyCatcherSoon() {
+        function refocusKeyCatcherSoon(force) {
             try {
+                $.global.__TLH_refocusKeyCatcherForce = !!force;
                 $.global.__TLH_refocusKeyCatcher = focusKeyCatcher;
-                app.scheduleTask('$.global.__TLH_refocusKeyCatcher && $.global.__TLH_refocusKeyCatcher();', 40, false);
+                app.scheduleTask('$.global.__TLH_refocusKeyCatcher && $.global.__TLH_refocusKeyCatcher($.global.__TLH_refocusKeyCatcherForce); $.global.__TLH_refocusKeyCatcherForce = false;', 40, false);
             } catch (_) {
-                try { focusKeyCatcher(); } catch (e) {}
+                try { focusKeyCatcher(force); } catch (e) {}
             }
         }
 
@@ -2046,7 +2249,7 @@ SCRIPTMETA-END
                 var ch = t.charAt(t.length - 1);
                 keyCatcher.text = "";
                 applyNumpadSelectionKey(ch);
-                focusKeyCatcher();
+                focusKeyCatcher(true);
             } catch (_) {}
         }
 
@@ -2075,7 +2278,7 @@ SCRIPTMETA-END
                     return;
                 }
 
-                if (!numericFieldActive) {
+                if (nowTime() >= numericFieldTypingUntil) {
                     var key = getPolledKeyboardKey();
                     if (/^[0-9.]$/.test(key)) {
                         if (key !== lastPolledNumpadKey) {
@@ -2098,15 +2301,15 @@ SCRIPTMETA-END
         function startKeyPolling() {
             try {
                 $.global.__TLH_keyPoll = pollNumpadKeys;
-                if (!$.global.__TLH_keyPollActive) {
-                    $.global.__TLH_keyPollActive = true;
-                    app.scheduleTask('$.global.__TLH_keyPoll && $.global.__TLH_keyPoll();', 120, false);
-                }
+                $.global.__TLH_keyPollActive = true;
+                app.scheduleTask('$.global.__TLH_keyPoll && $.global.__TLH_keyPoll();', 120, false);
             } catch (_) {}
         }
 
         function attachNumpadShortcuts(ctrl) {
             if (!ctrl) return;
+            if (isTextInputTarget(ctrl) && !isKeyCatcherTarget(ctrl)) return;
+
             try {
                 ctrl.addEventListener("keydown", handleNumpadLineSelection);
             } catch (_) {}
@@ -2129,15 +2332,26 @@ SCRIPTMETA-END
             pal.onShortcutKey = handleNumpadLineSelection;
             pal.onKeyDown = handleNumpadLineSelection;
         } catch (_) {}
+        try {
+            pal.onActivate = function () {
+                schedulePaletteReturnResetBurst();
+            };
+        } catch (_) {}
+        try {
+            pal.addEventListener("mousedown", function (ev) {
+                try { if (isNumericFieldTarget(ev.target)) return; } catch (_) {}
+                schedulePaletteReturnResetBurst();
+            });
+        } catch (_) {}
         pal.__focusKeyCatcher = focusKeyCatcher;
         pal.__startKeyPolling = startKeyPolling;
 
-        topChk.onClick = function () { setManualMode(); syncGridButtons(); };
-        bottomChk.onClick = function () { setManualMode(); syncGridButtons(); };
-        leftChk.onClick = function () { setManualMode(); syncGridButtons(); };
-        rightChk.onClick = function () { setManualMode(); syncGridButtons(); };
-        innerHChk.onClick = function () { setManualMode(); syncGridButtons(); };
-        innerVChk.onClick = function () { setManualMode(); syncGridButtons(); };
+        topChk.onClick = function () { setManualMode(true); syncGridButtons(); };
+        bottomChk.onClick = function () { setManualMode(true); syncGridButtons(); };
+        leftChk.onClick = function () { setManualMode(true); syncGridButtons(); };
+        rightChk.onClick = function () { setManualMode(true); syncGridButtons(); };
+        innerHChk.onClick = function () { setManualMode(true); syncGridButtons(); };
+        innerVChk.onClick = function () { setManualMode(true); syncGridButtons(); };
 
         rbAll.onClick = setQuickModeUI;
         rbOuter.onClick = setQuickModeUI;
@@ -2146,11 +2360,11 @@ SCRIPTMETA-END
         rbClearInner.onClick = setQuickModeUI;
         rbClearAll.onClick = setQuickModeUI;
         rbOuterInner.onClick = setQuickModeUI;
-        rbModeQuick.onClick = function () { rbModeQuick.value = true; rbModeManual.value = false; syncPreviewFromQuickSelection(); refocusKeyCatcherSoon(); };
-        rbModeManual.onClick = function () { rbModeManual.value = true; rbModeQuick.value = false; syncGridButtons(); refocusKeyCatcherSoon(); };
+        rbModeQuick.onClick = setQuickModeUI;
+        rbModeManual.onClick = function () { setManualMode(true); syncGridButtons(); };
 
         btnSelectAllTargets.onClick = function () {
-            setManualMode();
+            setManualMode(true);
             topChk.value = true;
             bottomChk.value = true;
             leftChk.value = true;
@@ -2162,7 +2376,7 @@ SCRIPTMETA-END
         };
 
         btnClearTargets.onClick = function () {
-            setManualMode();
+            setManualMode(true);
             topChk.value = false;
             bottomChk.value = false;
             leftChk.value = false;
