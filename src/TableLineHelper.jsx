@@ -1,10 +1,10 @@
 #target indesign
-#targetengine "tableLineHelperManualEngine"
+#targetengine "tableLineHelperEngine"
 
 /*
 SCRIPTMETA-BEGIN
 Script-ID=com.gyahtei.dtp.table-line-helper.indesign
-Version=1.0.1
+Version=1.0.12
 Meta-URL=https://github.com/SatoruTakahashi7/InDesign-Table-Tools
 Target-App=indesign
 Name=表組の罫線をいじるやつ / Table Line Helper
@@ -19,8 +19,8 @@ SCRIPTMETA-END
     TableLineHelper.jsx
     Japanese name: 表組の罫線をいじるやつ.jsx
 
-    Version: 1.0.1
-    Updated: 2026-06-06
+    Version: 1.0.12
+    Updated: 2026-07-18
     GYAHTEI Design Laboratory
     @gyahtei_satoru
     Developed with ChatGPT
@@ -135,16 +135,18 @@ SCRIPTMETA-END
     注意:
     - 結果に関しては一切の保証はできません。
     - 本スクリプトの読み取り結果および使用結果について、正確性・完全性は保証できません。
-
-    Thanks Ryu-chang　@baptize_Ryuji
 */
 
 (function () {
     var SCRIPT_NAME = "Table Line Helper";
     var PREF_KEY = "TableLineHelperPrefs_v3";
     var PRESET_KEY = "TableLineHelperUserPresets_v1";
-    var WEIGHT_VALUES_MM = ["0.1", "0.15", "0.25", "0.3", "0.4", "0.5", "0.75", "1", "2", "3"];
-    var WEIGHT_VALUES_PT = ["0.25", "0.3", "0.5", "1", "2", "4", "6", "8", "10"];
+    var WEIGHT_VALUES_MM = ["0", "0.1", "0.25", "0.35", "0.5", "0.75", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "15", "20", "25", "30"];
+    var WEIGHT_VALUES_PT = ["0", "0.25", "0.5", "0.75", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "20", "30", "40", "50", "60", "70", "80", "90", "100"];
+    // 現在の「対象セル」。起動時に初期化し、実行ボタンを押すたびに
+    // ドキュメントの最新選択から更新する。
+    var CAPTURED_CELLS = [];
+    var APPLY_STATS = null;
 
 
     // =========================================================
@@ -162,6 +164,81 @@ SCRIPTMETA-END
         try {
             $.writeln("[TableLineHelper] " + msg + (e ? " / " + e : ""));
         } catch (_) {}
+    }
+
+    function resetApplyStats() {
+        APPLY_STATS = {
+            cancelled: false,
+            attempts: 0,
+            changed: 0,
+            unchanged: 0,
+            errors: 0,
+            noneColor: 0,
+            firstError: ""
+        };
+    }
+
+    function recordApplyError(edgeName, e) {
+        if (!APPLY_STATS) resetApplyStats();
+        APPLY_STATS.errors++;
+        if (!APPLY_STATS.firstError) {
+            try {
+                APPLY_STATS.firstError = edgeName + ": " + e + (e.line ? "（行 " + e.line + "）" : "");
+            } catch (_) {
+                APPLY_STATS.firstError = edgeName + ": 不明なエラー";
+            }
+        }
+    }
+
+    function isNoneSwatch(sw) {
+        var name = "";
+        try { name = String(sw.name || sw); } catch (_) {}
+        name = name.toLowerCase();
+        return name === "[none]" || name === "none" || name === "[なし]" || name === "なし";
+    }
+
+    function reportApplyStats() {
+        if (!APPLY_STATS) return;
+        if (APPLY_STATS.cancelled) return;
+
+        // 全試行が失敗した場合だけエラーとして止める。
+        // 結合セルでは同じ境界を両側から処理する途中で一方の参照が
+        // 無効になることがあるが、他方で適用済みなら結果は有効。
+        if (APPLY_STATS.errors > 0 && (APPLY_STATS.changed + APPLY_STATS.unchanged) === 0) {
+            safeAlert(
+                "罫線の変更中にエラーが発生しました。\n\n" +
+                "試行: " + APPLY_STATS.attempts + "辺\n" +
+                "変更: " + APPLY_STATS.changed + "辺\n" +
+                "エラー: " + APPLY_STATS.errors + "辺\n\n" +
+                "最初のエラー: " + APPLY_STATS.firstError
+            );
+            return;
+        }
+
+        if (APPLY_STATS.errors > 0) {
+            logError(
+                "一部の重複境界をスキップ: " + APPLY_STATS.errors +
+                "辺 / " + APPLY_STATS.firstError,
+                null
+            );
+        }
+
+        if (APPLY_STATS.changed === 0) {
+            safeAlert(
+                "罫線プロパティは変更されませんでした。\n\n" +
+                "試行: " + APPLY_STATS.attempts + "辺\n" +
+                "変更なし: " + APPLY_STATS.unchanged + "辺"
+            );
+            return;
+        }
+
+        if (APPLY_STATS.noneColor > 0) {
+            safeAlert(
+                "線幅は変更できましたが、線色が［なし］の辺があります。\n\n" +
+                "「色・線種も適用」をオンにして、色を［黒］などにして再実行してください。\n\n" +
+                "変更: " + APPLY_STATS.changed + "辺"
+            );
+        }
     }
 
     function toNumber(v, fallback) {
@@ -190,7 +267,10 @@ SCRIPTMETA-END
     }
 
     function makeMeasurementString(rawValue, unit) {
-        return String(rawValue) + unit;
+        // 数値だけを渡すとInDesignは現在の線幅表示単位として解釈するため、
+        // 1 mmを正確に1 mmとして扱えるよう単位付き文字列で渡す。
+        var n = Number(rawValue);
+        return String(n) + " " + unit;
     }
 
     function savePrefs(ui) {
@@ -491,8 +571,8 @@ SCRIPTMETA-END
                 var key = ev.keyName || ev.keyIdentifier || ev.key;
                 if (key !== "Up" && key !== "ArrowUp" && key !== "Down" && key !== "ArrowDown") return;
 
-                // ご指定どおり：通常=1、Shift=0.1、Option=0.01
-                var step = 1;
+                // 通常=0.05、Shift=0.1、Option=0.01
+                var step = 0.05;
                 try {
                     if (ev.shiftKey) step = 0.1;
                     if (ev.altKey || ev.optionKey) step = 0.01;
@@ -509,13 +589,37 @@ SCRIPTMETA-END
         return unit === "pt" ? WEIGHT_VALUES_PT : WEIGHT_VALUES_MM;
     }
 
+    function refillWeightPresetDropdown(dd, unit) {
+        if (!dd) return;
+        try {
+            var values = getWeightPresetValues(unit);
+            var i;
+            dd.removeAll();
+            dd.add("item", "▼");
+            for (i = 0; i < values.length; i++) dd.add("item", values[i]);
+            dd.selection = dd.items[0];
+        } catch (e) {}
+    }
+
+    function applyWeightPresetDropdown(dd, targetEt) {
+        try {
+            if (!dd || !dd.selection || dd.selection.index === 0) return false;
+            targetEt.text = dd.selection.text;
+            normalizeNumberField(targetEt);
+            dd.selection = dd.items[0];
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
     function chooseWeightPreset(targetEt, unit) {
         try {
             var values = getWeightPresetValues(unit);
             var labels = [];
             var i;
             for (i = 0; i < values.length; i++) {
-                labels.push(values[i] + unit);
+                labels.push(values[i] + " " + unit);
             }
 
             var w = new Window("dialog", "線幅を選択");
@@ -616,6 +720,182 @@ SCRIPTMETA-END
         return null;
     }
 
+    function getTablesFromPageItem(obj) {
+        var out = [];
+        if (!obj) return out;
+
+        try {
+            if (obj.constructor && obj.constructor.name === "Group") {
+                var items = obj.allPageItems;
+                var i;
+                for (i = 0; i < items.length; i++) {
+                    out = out.concat(getTablesFromPageItem(items[i]));
+                }
+                return out;
+            }
+        } catch (e) {}
+
+        try {
+            if (obj.parentStory && obj.parentStory.isValid && obj.parentStory.tables && obj.parentStory.tables.length) {
+                var t = obj.parentStory.tables.everyItem().getElements();
+                var j;
+                for (j = 0; j < t.length; j++) out.push(t[j]);
+            }
+        } catch (e2) {}
+
+        return out;
+    }
+
+    function getCellsFromSelectionRectangle(obj) {
+        var out = [];
+        var rows = [];
+        var cols = [];
+        var table = null;
+        var allCells = [];
+        var minRow = 999999, maxRow = -1;
+        var minCol = 999999, maxCol = -1;
+        var i, cell, row, col, rowSpan, colSpan;
+
+        try { rows = obj.rows.everyItem().getElements(); } catch (_) {}
+        try { cols = obj.columns.everyItem().getElements(); } catch (_) {}
+
+        // 通常の単一セルなら従来処理へ任せる。複数行・複数列・複数セルの
+        // 選択時だけ、選択範囲を行×列から再構成する。
+        var objectCellCount = 0;
+        try { objectCellCount = obj.cells.length; } catch (_) {}
+        if (rows.length <= 1 && cols.length <= 1 && objectCellCount <= 1) return out;
+
+        for (i = 0; i < rows.length; i++) {
+            try {
+                row = rows[i].index;
+                if (row < minRow) minRow = row;
+                if (row > maxRow) maxRow = row;
+            } catch (_) {}
+        }
+        for (i = 0; i < cols.length; i++) {
+            try {
+                col = cols[i].index;
+                if (col < minCol) minCol = col;
+                if (col > maxCol) maxCol = col;
+            } catch (_) {}
+        }
+
+        if (maxRow < minRow || maxCol < minCol) return out;
+
+        table = parentOfType(obj, "Table");
+        if (!table) {
+            try {
+                if (obj.cells && obj.cells.length) table = parentOfType(obj.cells[0], "Table");
+            } catch (_) {}
+        }
+        if (!table) return out;
+
+        try { allCells = table.cells.everyItem().getElements(); } catch (_) { return out; }
+
+        for (i = 0; i < allCells.length; i++) {
+            cell = allCells[i];
+            try {
+                row = cell.parentRow.index;
+                col = cell.parentColumn.index;
+                rowSpan = cell.rowSpan || 1;
+                colSpan = cell.columnSpan || 1;
+
+                // 選択された行列範囲と重なる結合セルを含める。
+                if (row <= maxRow && row + rowSpan - 1 >= minRow &&
+                    col <= maxCol && col + colSpan - 1 >= minCol) {
+                    out.push(cell);
+                }
+            } catch (_) {}
+        }
+
+        return uniqueById(out);
+    }
+
+    function supplementMergedCellsAtSelectionEdges(cells) {
+        if (!cells || !cells.length) return cells || [];
+
+        var table = parentOfType(cells[0], "Table");
+        if (!table) return cells;
+
+        var allInfos = getAllTableCellInfos(table);
+        var infoMap = buildInfoMapById(allInfos);
+        var selectedSeen = {};
+        var selectedInfos = [];
+        var minRow = 999999, maxRow = -1, minCol = 999999, maxCol = -1;
+        var i, id, info;
+
+        for (i = 0; i < cells.length; i++) {
+            id = getCellIdSafe(cells[i]);
+            if (id === null || selectedSeen[id] || !infoMap[id]) continue;
+            selectedSeen[id] = true;
+            info = infoMap[id];
+            selectedInfos.push(info);
+            if (info.rowStart < minRow) minRow = info.rowStart;
+            if (info.rowEnd > maxRow) maxRow = info.rowEnd;
+            if (info.colStart < minCol) minCol = info.colStart;
+            if (info.colEnd > maxCol) maxCol = info.colEnd;
+        }
+
+        if (!selectedInfos.length) return cells;
+
+        var out = cells.slice(0);
+        var rightGroup = [];
+        var leftGroup = [];
+        var bottomGroup = [];
+        var topGroup = [];
+
+        for (i = 0; i < allInfos.length; i++) {
+            info = allInfos[i];
+            if (!info || selectedSeen[info.id]) continue;
+
+            // InDesignが選択範囲の端にある結合セルを落とす場合の補完。
+            // 隣接するセルを方向ごとに集め、複数セルの合計で範囲を覆うか後で判定する。
+            if (info.colStart === maxCol + 1 && rangesOverlap(info.rowStart, info.rowEnd, minRow, maxRow)) rightGroup.push(info);
+            if (info.colEnd === minCol - 1 && rangesOverlap(info.rowStart, info.rowEnd, minRow, maxRow)) leftGroup.push(info);
+            if (info.rowStart === maxRow + 1 && rangesOverlap(info.colStart, info.colEnd, minCol, maxCol)) bottomGroup.push(info);
+            if (info.rowEnd === minRow - 1 && rangesOverlap(info.colStart, info.colEnd, minCol, maxCol)) topGroup.push(info);
+        }
+
+        function addGroupIfItCovers(group, rangeStart, rangeEnd, useRows) {
+            if (!group || !group.length) return;
+
+            var covered = {};
+            var hasMerged = false;
+            var g, p, from, to;
+
+            for (g = 0; g < group.length; g++) {
+                info = group[g];
+                if (info.rowEnd > info.rowStart || info.colEnd > info.colStart) hasMerged = true;
+                from = useRows ? info.rowStart : info.colStart;
+                to = useRows ? info.rowEnd : info.colEnd;
+                if (from < rangeStart) from = rangeStart;
+                if (to > rangeEnd) to = rangeEnd;
+                for (p = from; p <= to; p++) covered[p] = true;
+            }
+
+            // 通常セルだけの隣接列・行は補完しない。
+            if (!hasMerged) return;
+            for (p = rangeStart; p <= rangeEnd; p++) {
+                if (!covered[p]) return;
+            }
+
+            for (g = 0; g < group.length; g++) {
+                info = group[g];
+                if (!selectedSeen[info.id]) {
+                    selectedSeen[info.id] = true;
+                    out.push(info.cell);
+                }
+            }
+        }
+
+        addGroupIfItCovers(rightGroup, minRow, maxRow, true);
+        addGroupIfItCovers(leftGroup, minRow, maxRow, true);
+        addGroupIfItCovers(bottomGroup, minCol, maxCol, false);
+        addGroupIfItCovers(topGroup, minCol, maxCol, false);
+
+        return uniqueById(out);
+    }
+
     function getSelectedCells() {
         var sel = getSelection();
         if (!sel || !sel.length) return [];
@@ -629,6 +909,33 @@ SCRIPTMETA-END
             try { name = obj.constructor.name; } catch (e) {}
 
             try {
+                // 結合セルを含む複数セル選択では、InDesignの obj.cells が
+                // 右端・下端のセルを返さないことがある。行×列範囲から先に補完する。
+                var rectangleCells = getCellsFromSelectionRectangle(obj);
+                if (rectangleCells.length) {
+                    for (j = 0; j < rectangleCells.length; j++) cells.push(rectangleCells[j]);
+                    continue;
+                }
+
+                // InDesignでは複数セルを選択しても constructor.name が
+                // "Cell" になる。その場合、選択範囲全体は obj.cells に入る。
+                // 単一Cellとして処理する前に、必ず cells コレクションを展開する。
+                if (obj.cells && obj.cells.length > 0) {
+                    try {
+                        arr = obj.cells.everyItem().getElements();
+                    } catch (cellsGetError) {
+                        arr = [];
+                        for (j = 0; j < obj.cells.length; j++) {
+                            arr.push(obj.cells[j]);
+                        }
+                    }
+
+                    if (arr && arr.length) {
+                        for (j = 0; j < arr.length; j++) cells.push(arr[j]);
+                        continue;
+                    }
+                }
+
                 if (name === "Cell") {
                     cells.push(obj);
                     continue;
@@ -659,12 +966,24 @@ SCRIPTMETA-END
                         continue;
                     }
                 }
+
+                var framesTables = getTablesFromPageItem(obj);
+                if (framesTables && framesTables.length) {
+                    for (j = 0; j < framesTables.length; j++) {
+                        arr = framesTables[j].cells.everyItem().getElements();
+                        for (var k = 0; k < arr.length; k++) cells.push(arr[k]);
+                    }
+                    continue;
+                }
             } catch (e) {
                 logError("selection parse", e);
             }
         }
 
-        return uniqueById(cells);
+        cells = uniqueById(cells);
+        cells = supplementMergedCellsAtSelectionEdges(cells);
+
+        return cells;
     }
 
     // =========================================================
@@ -803,7 +1122,7 @@ SCRIPTMETA-END
     }
 
     function analyzeSelection() {
-        var cells = getSelectedCells();
+        var cells = CAPTURED_CELLS;
         if (!cells.length) {
             return {
                 ok: false,
@@ -830,6 +1149,8 @@ SCRIPTMETA-END
         var infoMap = buildInfoMapById(allInfos);
 
         var minRow = 999999, maxRow = -1, minCol = 999999, maxCol = -1;
+        var selectedInfos = [];
+        var selectedSeen = {};
         var i, id, info;
 
         for (i = 0; i < cells.length; i++) {
@@ -838,6 +1159,13 @@ SCRIPTMETA-END
 
             info = infoMap[id];
             if (!info) continue;
+
+            // 外接矩形内の全セルへ拡張せず、InDesignが実際に返した
+            // 選択セルだけを処理対象として保持する。
+            if (!selectedSeen[id]) {
+                selectedSeen[id] = true;
+                selectedInfos.push(info);
+            }
 
             if (info.rowStart < minRow) minRow = info.rowStart;
             if (info.rowEnd > maxRow) maxRow = info.rowEnd;
@@ -852,8 +1180,17 @@ SCRIPTMETA-END
             };
         }
 
-        var grid = buildGridMap(allInfos, minRow, maxRow, minCol, maxCol);
-        var infos = collectInfosFromGrid(grid, minRow, maxRow, minCol, maxCol);
+        if (!selectedInfos.length) {
+            return {
+                ok: false,
+                reason: "選択セルの特定に失敗しました。"
+            };
+        }
+
+        // 選択セルだけでグリッドを作る。結合セルの外接矩形内にある
+        // 未選択セルを勝手に追加しない。
+        var infos = selectedInfos;
+        var grid = buildGridMap(infos, minRow, maxRow, minCol, maxCol);
         var outCells = [];
         for (i = 0; i < infos.length; i++) {
             outCells.push(infos[i].cell);
@@ -933,43 +1270,66 @@ SCRIPTMETA-END
             return;
         }
 
+        if (!APPLY_STATS) resetApplyStats();
+        APPLY_STATS.attempts++;
+
         try {
+            var beforeWeight;
+            var afterWeight;
             if (edgeName === "top") {
+                beforeWeight = Number(cell.topEdgeStrokeWeight);
                 cell.topEdgeStrokeWeight = weightValue;
                 if (setAppearance) {
                     if (colorObj) cell.topEdgeStrokeColor = colorObj;
                     if (strokeStyleObj) cell.topEdgeStrokeType = strokeStyleObj;
                 }
+                afterWeight = Number(cell.topEdgeStrokeWeight);
+                if (!setAppearance && toNumber(weightValue, 0) > 0 && isNoneSwatch(cell.topEdgeStrokeColor)) APPLY_STATS.noneColor++;
+                if (beforeWeight !== afterWeight) APPLY_STATS.changed++; else APPLY_STATS.unchanged++;
                 return;
             }
 
             if (edgeName === "bottom") {
+                beforeWeight = Number(cell.bottomEdgeStrokeWeight);
                 cell.bottomEdgeStrokeWeight = weightValue;
                 if (setAppearance) {
                     if (colorObj) cell.bottomEdgeStrokeColor = colorObj;
                     if (strokeStyleObj) cell.bottomEdgeStrokeType = strokeStyleObj;
                 }
+                afterWeight = Number(cell.bottomEdgeStrokeWeight);
+                if (!setAppearance && toNumber(weightValue, 0) > 0 && isNoneSwatch(cell.bottomEdgeStrokeColor)) APPLY_STATS.noneColor++;
+                if (beforeWeight !== afterWeight) APPLY_STATS.changed++; else APPLY_STATS.unchanged++;
                 return;
             }
 
             if (edgeName === "left") {
+                beforeWeight = Number(cell.leftEdgeStrokeWeight);
                 cell.leftEdgeStrokeWeight = weightValue;
                 if (setAppearance) {
                     if (colorObj) cell.leftEdgeStrokeColor = colorObj;
                     if (strokeStyleObj) cell.leftEdgeStrokeType = strokeStyleObj;
                 }
+                afterWeight = Number(cell.leftEdgeStrokeWeight);
+                if (!setAppearance && toNumber(weightValue, 0) > 0 && isNoneSwatch(cell.leftEdgeStrokeColor)) APPLY_STATS.noneColor++;
+                if (beforeWeight !== afterWeight) APPLY_STATS.changed++; else APPLY_STATS.unchanged++;
                 return;
             }
 
             if (edgeName === "right") {
+                beforeWeight = Number(cell.rightEdgeStrokeWeight);
                 cell.rightEdgeStrokeWeight = weightValue;
                 if (setAppearance) {
                     if (colorObj) cell.rightEdgeStrokeColor = colorObj;
                     if (strokeStyleObj) cell.rightEdgeStrokeType = strokeStyleObj;
                 }
+                afterWeight = Number(cell.rightEdgeStrokeWeight);
+                if (!setAppearance && toNumber(weightValue, 0) > 0 && isNoneSwatch(cell.rightEdgeStrokeColor)) APPLY_STATS.noneColor++;
+                if (beforeWeight !== afterWeight) APPLY_STATS.changed++; else APPLY_STATS.unchanged++;
                 return;
             }
-        } catch (e2) {}
+        } catch (e2) {
+            recordApplyError(edgeName, e2);
+        }
     }
 
     function isTopEdge(info, selectionInfo) {
@@ -1221,12 +1581,14 @@ SCRIPTMETA-END
         var msg =
             "選択範囲に結合セルが含まれています。\n\n" +
             "「" + operationName + "」はベストエフォートで実行します。\n" +
-            "結合セルの構造によっては、内部罫線が一部反映されない、\n" +
+            "結合セルの構造によっては、罫線が一部反映されない、\n" +
             "または想定外の辺に反映される可能性があります。\n\n" +
             "続行しますか？";
 
         try {
-            return confirm(msg);
+            var confirmed = confirm(msg);
+            if (!confirmed && APPLY_STATS) APPLY_STATS.cancelled = true;
+            return confirmed;
         } catch (e) {
             return true;
         }
@@ -1284,51 +1646,51 @@ SCRIPTMETA-END
     // =========================================================
     // Core Apply
     // =========================================================
-    function applyOuter(weightValue, uiAppearance) {
+    function applyOuter(weightValue, uiAppearance, operationName) {
         var sel = analyzeSelection();
         if (!sel.ok) {
             safeAlert(sel.reason);
             return;
         }
 
-        app.doScript(function () {
-            var i, info;
-            for (i = 0; i < sel.infos.length; i++) {
-                info = sel.infos[i];
+        if (!confirmMergedInternalRisk(sel, operationName || "外枠適用")) return;
 
-                if (isTopEdge(info, sel)) {
-                    applyOneEdge(info.cell, "top", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
-                }
-                if (isBottomEdge(info, sel)) {
-                    applyOneEdge(info.cell, "bottom", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
-                }
-                if (isLeftEdge(info, sel)) {
-                    applyOneEdge(info.cell, "left", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
-                }
-                if (isRightEdge(info, sel)) {
-                    applyOneEdge(info.cell, "right", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
-                }
-            }
-        }, ScriptLanguage.JAVASCRIPT, undefined, UndoModes.ENTIRE_SCRIPT, SCRIPT_NAME + " outer");
-    }
+        var i, info;
+        for (i = 0; i < sel.infos.length; i++) {
+            info = sel.infos[i];
 
-    function applyAll(weightValue, uiAppearance) {
-        var sel = analyzeSelection();
-        if (!sel.ok) {
-            safeAlert(sel.reason);
-            return;
-        }
-
-        app.doScript(function () {
-            var i, info;
-            for (i = 0; i < sel.infos.length; i++) {
-                info = sel.infos[i];
+            if (isTopEdge(info, sel)) {
                 applyOneEdge(info.cell, "top", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
+            }
+            if (isBottomEdge(info, sel)) {
                 applyOneEdge(info.cell, "bottom", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
+            }
+            if (isLeftEdge(info, sel)) {
                 applyOneEdge(info.cell, "left", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
+            }
+            if (isRightEdge(info, sel)) {
                 applyOneEdge(info.cell, "right", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
             }
-        }, ScriptLanguage.JAVASCRIPT, undefined, UndoModes.ENTIRE_SCRIPT, SCRIPT_NAME + " all");
+        }
+    }
+
+    function applyAll(weightValue, uiAppearance, operationName) {
+        var sel = analyzeSelection();
+        if (!sel.ok) {
+            safeAlert(sel.reason);
+            return;
+        }
+
+        if (!confirmMergedInternalRisk(sel, operationName || "全部適用")) return;
+
+        var i, info;
+        for (i = 0; i < sel.infos.length; i++) {
+            info = sel.infos[i];
+            applyOneEdge(info.cell, "top", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
+            applyOneEdge(info.cell, "bottom", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
+            applyOneEdge(info.cell, "left", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
+            applyOneEdge(info.cell, "right", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
+        }
     }
 
     function applyInner(weightValue, uiAppearance, operationName) {
@@ -1343,15 +1705,11 @@ SCRIPTMETA-END
 
         var table = sel.table;
 
-        app.doScript(function () {
-            // グリッド境界で処理し、さらにセルのスパン同士の隣接も保険として処理する。
-            // 結合セルを含む選択では、InDesign側のセル参照がグリッド通りに返らないことがあるため。
-            applyHorizontalInternalGrid(table, sel, weightValue, uiAppearance);
-            applyVerticalInternalGrid(table, sel, weightValue, uiAppearance);
-            applyHorizontalInternalPairs(sel, weightValue, uiAppearance);
-            applyVerticalInternalPairs(sel, weightValue, uiAppearance);
-            applyLooseInternalPairs(sel, weightValue, uiAppearance);
-        }, ScriptLanguage.JAVASCRIPT, undefined, UndoModes.ENTIRE_SCRIPT, SCRIPT_NAME + " inner-grid-pair");
+        // 選択セル間に実在する共有境界だけを処理する。
+        applyHorizontalInternalGrid(table, sel, weightValue, uiAppearance);
+        applyVerticalInternalGrid(table, sel, weightValue, uiAppearance);
+        applyHorizontalInternalPairs(sel, weightValue, uiAppearance);
+        applyVerticalInternalPairs(sel, weightValue, uiAppearance);
     }
 
     function clearOuter() {
@@ -1359,7 +1717,7 @@ SCRIPTMETA-END
             setAppearance: false,
             colorObj: null,
             strokeStyleObj: null
-        });
+        }, "外枠消去");
     }
 
     function clearInner() {
@@ -1375,7 +1733,7 @@ SCRIPTMETA-END
             setAppearance: false,
             colorObj: null,
             strokeStyleObj: null
-        });
+        }, "全消去");
     }
 
     function applyOuterInner(outerValue, innerValue, uiAppearance) {
@@ -1389,33 +1747,29 @@ SCRIPTMETA-END
 
         var table = sel.table;
 
-        app.doScript(function () {
-            var i, info;
+        var i, info;
 
-            for (i = 0; i < sel.infos.length; i++) {
-                info = sel.infos[i];
+        for (i = 0; i < sel.infos.length; i++) {
+            info = sel.infos[i];
 
-                if (isTopEdge(info, sel)) {
-                    applyOneEdge(info.cell, "top", outerValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
-                }
-                if (isBottomEdge(info, sel)) {
-                    applyOneEdge(info.cell, "bottom", outerValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
-                }
-                if (isLeftEdge(info, sel)) {
-                    applyOneEdge(info.cell, "left", outerValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
-                }
-                if (isRightEdge(info, sel)) {
-                    applyOneEdge(info.cell, "right", outerValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
-                }
+            if (isTopEdge(info, sel)) {
+                applyOneEdge(info.cell, "top", outerValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
             }
+            if (isBottomEdge(info, sel)) {
+                applyOneEdge(info.cell, "bottom", outerValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
+            }
+            if (isLeftEdge(info, sel)) {
+                applyOneEdge(info.cell, "left", outerValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
+            }
+            if (isRightEdge(info, sel)) {
+                applyOneEdge(info.cell, "right", outerValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
+            }
+        }
 
-            applyHorizontalInternalGrid(table, sel, innerValue, uiAppearance);
-            applyVerticalInternalGrid(table, sel, innerValue, uiAppearance);
-            applyHorizontalInternalPairs(sel, innerValue, uiAppearance);
-            applyVerticalInternalPairs(sel, innerValue, uiAppearance);
-            applyLooseInternalPairs(sel, innerValue, uiAppearance);
-
-        }, ScriptLanguage.JAVASCRIPT, undefined, UndoModes.ENTIRE_SCRIPT, SCRIPT_NAME + " outer_inner");
+        applyHorizontalInternalGrid(table, sel, innerValue, uiAppearance);
+        applyVerticalInternalGrid(table, sel, innerValue, uiAppearance);
+        applyHorizontalInternalPairs(sel, innerValue, uiAppearance);
+        applyVerticalInternalPairs(sel, innerValue, uiAppearance);
     }
 
     function applyManual(opts, weightValue, uiAppearance) {
@@ -1425,49 +1779,47 @@ SCRIPTMETA-END
             return;
         }
 
-        if ((opts.innerH || opts.innerV) && !confirmMergedInternalRisk(sel, "線選択（内側横/内側縦）")) return;
+        if (!confirmMergedInternalRisk(sel, "線選択")) return;
 
         var table = sel.table;
 
-        app.doScript(function () {
-            var i, info;
+        var i, info;
 
-            for (i = 0; i < sel.infos.length; i++) {
-                info = sel.infos[i];
+        for (i = 0; i < sel.infos.length; i++) {
+            info = sel.infos[i];
 
-                if (opts.top) {
-                    applyOneEdge(info.cell, "top", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
-                }
-                if (opts.bottom) {
-                    applyOneEdge(info.cell, "bottom", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
-                }
-                if (opts.left) {
-                    applyOneEdge(info.cell, "left", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
-                }
-                if (opts.right) {
-                    applyOneEdge(info.cell, "right", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
-                }
+            if (opts.top && isTopEdge(info, sel)) {
+                applyOneEdge(info.cell, "top", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
             }
-
-            if (opts.innerH) {
-                applyHorizontalInternalGrid(table, sel, weightValue, uiAppearance);
-                applyHorizontalInternalPairs(sel, weightValue, uiAppearance);
-                applyLooseInternalPairs(sel, weightValue, uiAppearance);
+            if (opts.bottom && isBottomEdge(info, sel)) {
+                applyOneEdge(info.cell, "bottom", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
             }
-
-            if (opts.innerV) {
-                applyVerticalInternalGrid(table, sel, weightValue, uiAppearance);
-                applyVerticalInternalPairs(sel, weightValue, uiAppearance);
-                applyLooseInternalPairs(sel, weightValue, uiAppearance);
+            if (opts.left && isLeftEdge(info, sel)) {
+                applyOneEdge(info.cell, "left", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
             }
-        }, ScriptLanguage.JAVASCRIPT, undefined, UndoModes.ENTIRE_SCRIPT, SCRIPT_NAME + " manual");
+            if (opts.right && isRightEdge(info, sel)) {
+                applyOneEdge(info.cell, "right", weightValue, uiAppearance.colorObj, uiAppearance.strokeStyleObj, uiAppearance.setAppearance);
+            }
+        }
+
+        if (opts.innerH) {
+            applyHorizontalInternalGrid(table, sel, weightValue, uiAppearance);
+            applyHorizontalInternalPairs(sel, weightValue, uiAppearance);
+        }
+
+        if (opts.innerV) {
+            applyVerticalInternalGrid(table, sel, weightValue, uiAppearance);
+            applyVerticalInternalPairs(sel, weightValue, uiAppearance);
+        }
     }
 
     // =========================================================
     // UI
     // =========================================================
     function createPalette() {
-        var pal = new Window("palette", "表罫線ヘルパー");
+        // dialog のまま文書を変更すると InDesign エラー 1050 になるため、
+        // 文書操作が可能な非モーダル palette を使用する。
+        var pal = new Window("palette", "表罫線ヘルパー（選択 " + CAPTURED_CELLS.length + "セル）");
         pal.orientation = "column";
         pal.alignChildren = ["fill", "top"];
         pal.spacing = 8;
@@ -1486,8 +1838,8 @@ SCRIPTMETA-END
         var weightEt = row1.add("edittext", undefined, "0.1");
         weightEt.characters = 8;
 
-        var weightBtn = row1.add("button", undefined, "▼");
-        weightBtn.preferredSize = [28, 26];
+        var weightBtn = row1.add("dropdownlist", undefined, []);
+        weightBtn.preferredSize = [66, 26];
 
         var unitDd = row1.add("dropdownlist", undefined, ["pt", "mm"]);
         unitDd.selection = 1; // mm
@@ -1642,8 +1994,6 @@ SCRIPTMETA-END
         }
 
         function toggleNearestGridLine(ev) {
-            primeNumpadFocusAfterReturn(ev, true);
-
             var geo = getGridGeometry(gridPreview);
             var x = 0;
             var y = 0;
@@ -1674,9 +2024,8 @@ SCRIPTMETA-END
             if (candidates[0].name === "right") rightChk.value = !rightChk.value;
             if (candidates[0].name === "innerH") innerHChk.value = !innerHChk.value;
             if (candidates[0].name === "innerV") innerVChk.value = !innerVChk.value;
-            setManualMode(false);
+            setManualMode(true);
             syncGridButtons();
-            primeNumpadFocusAfterReturn(null, true);
         }
 
         try {
@@ -1691,9 +2040,6 @@ SCRIPTMETA-END
         var btnSelectAllTargets = m3.add("button", undefined, "全部選択");
         var btnClearTargets = m3.add("button", undefined, "解除");
 
-        // 物理テンキーのショートカットは内部処理として残す。
-        // 画面上の「線選択キー」パネルは表示しない。
-        // InDesign / ScriptUI の環境差により、物理テンキーの取得はベストエフォート。
         // 起動直後のキー入力を拾うため、見えない小さな入力欄をキー受けとして置く。
         var keyCatcher = manualPanel.add("edittext", undefined, "");
         keyCatcher.preferredSize = [1, 1];
@@ -1721,15 +2067,15 @@ SCRIPTMETA-END
         var outerEt = q2.add("edittext", undefined, "0.3");
         outerEt.characters = 5;
         var outerUnitText = q2.add("statictext", undefined, "mm");
-        var outerBtn = q2.add("button", undefined, "▼");
-        outerBtn.preferredSize = [28, 24];
+        var outerBtn = q2.add("dropdownlist", undefined, []);
+        outerBtn.preferredSize = [62, 24];
 
         q2.add("statictext", undefined, "内部:");
         var innerEt = q2.add("edittext", undefined, "0.1");
         innerEt.characters = 5;
         var innerUnitText = q2.add("statictext", undefined, "mm");
-        var innerBtn = q2.add("button", undefined, "▼");
-        innerBtn.preferredSize = [28, 24];
+        var innerBtn = q2.add("dropdownlist", undefined, []);
+        innerBtn.preferredSize = [62, 24];
 
 
         var executePanel = pal.add("group");
@@ -1737,6 +2083,8 @@ SCRIPTMETA-END
         executePanel.alignChildren = ["left", "center"];
         var btnRun = executePanel.add("button", undefined, "実行");
         btnRun.preferredSize = [140, 36];
+        var btnClose = executePanel.add("button", undefined, "閉じる");
+        btnClose.preferredSize = [100, 36];
 
         pal.__ui = {
             rbModeQuick: rbModeQuick,
@@ -1824,152 +2172,26 @@ SCRIPTMETA-END
         attachCursorIncrement(outerEt, getCurrentUnit);
         attachCursorIncrement(innerEt, getCurrentUnit);
 
-        var numericFieldActive = false;
-        var numericFieldTypingUntil = 0;
-        var lastPaletteReturnResetAt = 0;
-
-        function nowTime() {
-            try { return (new Date()).getTime(); } catch (_) {}
-            return 0;
-        }
-
-        function markNumericFieldTyping() {
-            numericFieldTypingUntil = nowTime() + 450;
-        }
-
-        function releaseNumericFieldFocus() {
-            numericFieldActive = false;
-            numericFieldTypingUntil = 0;
-        }
-
-        function releaseNumericFieldFocusSoon() {
-            releaseNumericFieldFocus();
-            primeNumpadFocusAfterReturn(null, true);
-        }
-
-        function resetFocusAfterNumericField() {
+        // テンキー用の小さな受け皿(keyCatcher)へフォーカスを戻す。
+        function focusKeyCatcher() {
             try {
-                var wasManual = rbModeManual.value;
-                rbModeQuick.value = true;
-                rbModeManual.value = false;
-                rbModeQuick.active = true;
-
-                if (wasManual) {
-                    $.global.__TLH_restoreManualModeAfterFocusReset = function () {
-                        try {
-                            rbModeManual.value = true;
-                            rbModeQuick.value = false;
-                            focusKeyCatcher(true);
-                        } catch (_) {}
-                    };
-                    try {
-                        app.scheduleTask('$.global.__TLH_restoreManualModeAfterFocusReset && $.global.__TLH_restoreManualModeAfterFocusReset();', 80, false);
-                    } catch (_) {
-                        $.global.__TLH_restoreManualModeAfterFocusReset();
-                    }
+                if (keyCatcher && keyCatcher.visible) {
+                    keyCatcher.text = "";
+                    keyCatcher.active = true;
                 }
             } catch (_) {}
         }
 
-        function resetFocusAfterPaletteReturn(ev, force) {
-            try {
-                if (ev) {
-                    try { if (isNumericFieldTarget(ev.target)) return; } catch (_) {}
-                    try { if (isNumericFieldTarget(ev.currentTarget)) return; } catch (_) {}
-                }
 
-                if (isNumericFieldActuallyActive()) return;
-
-                var t = nowTime();
-                if (!force && t - lastPaletteReturnResetAt < 350) return;
-                lastPaletteReturnResetAt = t;
-
-                forceQuickModeForNextNumpad();
-            } catch (_) {}
-        }
-
-        function schedulePaletteReturnResetBurst() {
-            try {
-                $.global.__TLH_resetFocusAfterPaletteReturn = resetFocusAfterPaletteReturn;
-                app.scheduleTask('$.global.__TLH_resetFocusAfterPaletteReturn && $.global.__TLH_resetFocusAfterPaletteReturn(null, true);', 40, false);
-                app.scheduleTask('$.global.__TLH_resetFocusAfterPaletteReturn && $.global.__TLH_resetFocusAfterPaletteReturn(null, true);', 160, false);
-                app.scheduleTask('$.global.__TLH_resetFocusAfterPaletteReturn && $.global.__TLH_resetFocusAfterPaletteReturn(null, true);', 360, false);
-                app.scheduleTask('$.global.__TLH_resetFocusAfterPaletteReturn && $.global.__TLH_resetFocusAfterPaletteReturn(null, true);', 720, false);
-            } catch (_) {
-                resetFocusAfterPaletteReturn(null, true);
-            }
-        }
-
-        function forceQuickModeForNextNumpad() {
-            try {
-                releaseNumericFieldFocus();
-                rbModeQuick.value = true;
-                rbModeManual.value = false;
-                rbModeQuick.active = true;
-                syncPreviewFromQuickSelection();
-                startKeyPolling();
-                focusKeyCatcher(true);
-                refocusKeyCatcherSoon(true);
-
-                try {
-                    app.scheduleTask('$.global.__TLH_keyPoll && $.global.__TLH_keyPoll();', 120, false);
-                    app.scheduleTask('$.global.__TLH_refocusKeyCatcher && $.global.__TLH_refocusKeyCatcher(true);', 180, false);
-                    app.scheduleTask('$.global.__TLH_refocusKeyCatcher && $.global.__TLH_refocusKeyCatcher(true);', 360, false);
-                } catch (_) {}
-            } catch (_) {}
-        }
-
-        function primeNumpadFocusAfterReturn(ev, force) {
-            try {
-                if (ev) {
-                    try { if (isNumericFieldTarget(ev.target)) return; } catch (_) {}
-                    try { if (isNumericFieldTarget(ev.currentTarget)) return; } catch (_) {}
-                }
-                if (isNumericFieldActuallyActive() && !force) return;
-
-                releaseNumericFieldFocus();
-                resetFocusAfterNumericField();
-                startKeyPolling();
-                focusKeyCatcher(true);
-                refocusKeyCatcherSoon(true);
-
-                try {
-                    app.scheduleTask('$.global.__TLH_resetFocusAfterNumericField && $.global.__TLH_resetFocusAfterNumericField();', 80, false);
-                    app.scheduleTask('$.global.__TLH_keyPoll && $.global.__TLH_keyPoll();', 120, false);
-                    app.scheduleTask('$.global.__TLH_refocusKeyCatcher && $.global.__TLH_refocusKeyCatcher(true);', 180, false);
-                    app.scheduleTask('$.global.__TLH_refocusKeyCatcher && $.global.__TLH_refocusKeyCatcher(true);', 360, false);
-                    app.scheduleTask('$.global.__TLH_refocusKeyCatcher && $.global.__TLH_refocusKeyCatcher(true);', 700, false);
-                } catch (_) {}
-            } catch (_) {}
-        }
-
-        try {
-            $.global.__TLH_releaseNumericFieldFocus = releaseNumericFieldFocusSoon;
-            $.global.__TLH_resetFocusAfterNumericField = resetFocusAfterNumericField;
-            $.global.__TLH_resetFocusAfterPaletteReturn = resetFocusAfterPaletteReturn;
-            $.global.__TLH_schedulePaletteReturnResetBurst = schedulePaletteReturnResetBurst;
-            $.global.__TLH_primeNumpadFocusAfterReturn = primeNumpadFocusAfterReturn;
-            $.global.__TLH_forceQuickModeForNextNumpad = forceQuickModeForNextNumpad;
-        } catch (_) {}
 
         function markNumericField(et) {
             try {
-                et.onActivate = function () { numericFieldActive = true; markNumericFieldTyping(); };
-                et.onDeactivate = releaseNumericFieldFocusSoon;
-            } catch (_) {}
-
-            try {
                 et.addEventListener("keydown", function (ev) {
-                    markNumericFieldTyping();
                     var key = "";
                     try { key = ev.keyName || ev.keyIdentifier || ev.key || ""; } catch (_) {}
                     key = String(key);
-                    if (key === "Enter" || key === "Return" || key === "Tab" || key === "Escape") {
-                        try {
-                            app.scheduleTask('$.global.__TLH_releaseNumericFieldFocus && $.global.__TLH_releaseNumericFieldFocus();', 30, false);
-                        } catch (_) {
-                            releaseNumericFieldFocusSoon();
-                        }
+                    if (key === "Tab" || key === "Escape") {
+                        try { focusKeyCatcher(); } catch (_) {}
                     }
                 });
             } catch (_) {}
@@ -1979,40 +2201,37 @@ SCRIPTMETA-END
         markNumericField(outerEt);
         markNumericField(innerEt);
 
-        weightEt.onChange = function () { normalizeNumberField(weightEt); updateWeightDropdownsAndUnitLabels(); releaseNumericFieldFocusSoon(); };
-        outerEt.onChange = function () { normalizeNumberField(outerEt); updateWeightDropdownsAndUnitLabels(); releaseNumericFieldFocusSoon(); };
-        innerEt.onChange = function () { normalizeNumberField(innerEt); updateWeightDropdownsAndUnitLabels(); releaseNumericFieldFocusSoon(); };
+        weightEt.onChange = function () { normalizeNumberField(weightEt); updateWeightDropdownsAndUnitLabels(); };
+        outerEt.onChange = function () { normalizeNumberField(outerEt); updateWeightDropdownsAndUnitLabels(); };
+        innerEt.onChange = function () { normalizeNumberField(innerEt); updateWeightDropdownsAndUnitLabels(); };
 
         function updateWeightDropdownsAndUnitLabels() {
             var unit = getCurrentUnit();
             try { outerUnitText.text = unit; } catch (e1) {}
             try { innerUnitText.text = unit; } catch (e2) {}
+            refillWeightPresetDropdown(weightBtn, unit);
+            refillWeightPresetDropdown(outerBtn, unit);
+            refillWeightPresetDropdown(innerBtn, unit);
         }
 
-        weightBtn.onClick = function () {
-            chooseWeightPreset(weightEt, getCurrentUnit());
-            updateWeightDropdownsAndUnitLabels();
-            refocusKeyCatcherSoon();
+        weightBtn.onChange = function () {
+            if (applyWeightPresetDropdown(weightBtn, weightEt)) focusKeyCatcher();
         };
-        outerBtn.onClick = function () {
-            chooseWeightPreset(outerEt, getCurrentUnit());
-            updateWeightDropdownsAndUnitLabels();
-            refocusKeyCatcherSoon();
+        outerBtn.onChange = function () {
+            if (applyWeightPresetDropdown(outerBtn, outerEt)) focusKeyCatcher();
         };
-        innerBtn.onClick = function () {
-            chooseWeightPreset(innerEt, getCurrentUnit());
-            updateWeightDropdownsAndUnitLabels();
-            refocusKeyCatcherSoon();
+        innerBtn.onChange = function () {
+            if (applyWeightPresetDropdown(innerBtn, innerEt)) focusKeyCatcher();
         };
 
         btnPresetSave.onClick = function () {
             saveCurrentPreset(pal.__ui);
-            refocusKeyCatcherSoon();
+            focusKeyCatcher();
         };
 
         btnPresetDelete.onClick = function () {
             deleteSelectedPreset(pal.__ui);
-            refocusKeyCatcherSoon();
+            focusKeyCatcher();
         };
 
         presetDd.onChange = function () {
@@ -2021,7 +2240,7 @@ SCRIPTMETA-END
             var presetName = getSelectedPresetName(pal.__ui);
             if (!presetName) {
                 updatePresetInfo(pal.__ui, "プリセットを選ぶと設定に反映されます。実行はまだしません。");
-                refocusKeyCatcherSoon();
+                focusKeyCatcher();
                 return;
             }
 
@@ -2038,28 +2257,24 @@ SCRIPTMETA-END
                 } catch (e) {}
                 savePrefs(pal.__ui);
             }
-            refocusKeyCatcherSoon();
+            focusKeyCatcher();
         };
 
         unitDd.onChange = function () {
             updateWeightDropdownsAndUnitLabels();
         };
 
-        function setManualMode(strongRefocus) {
-            releaseNumericFieldFocus();
+        function setManualMode() {
             rbModeManual.value = true;
             rbModeQuick.value = false;
-            refocusKeyCatcherSoon(true);
-            if (strongRefocus) primeNumpadFocusAfterReturn(null, true);
+            focusKeyCatcher();
         }
 
         function setQuickModeUI() {
-            releaseNumericFieldFocus();
             rbModeQuick.value = true;
             rbModeManual.value = false;
             syncPreviewFromQuickSelection();
-            refocusKeyCatcherSoon(true);
-            forceQuickModeForNextNumpad();
+            focusKeyCatcher();
         }
 
         function toggleLineCheck(chk) {
@@ -2094,13 +2309,6 @@ SCRIPTMETA-END
             try {
                 return target === weightEt || target === outerEt || target === innerEt;
             } catch (_) {}
-            return false;
-        }
-
-        function isNumericFieldActuallyActive() {
-            try { if (weightEt && weightEt.active) return true; } catch (_) {}
-            try { if (outerEt && outerEt.active) return true; } catch (_) {}
-            try { if (innerEt && innerEt.active) return true; } catch (_) {}
             return false;
         }
 
@@ -2222,26 +2430,6 @@ SCRIPTMETA-END
             }
         }
 
-        function focusKeyCatcher(force) {
-            try {
-                if (isNumericFieldActuallyActive() && !force) return;
-                if (keyCatcher && keyCatcher.visible) {
-                    keyCatcher.text = "";
-                    keyCatcher.active = true;
-                }
-            } catch (_) {}
-        }
-
-        function refocusKeyCatcherSoon(force) {
-            try {
-                $.global.__TLH_refocusKeyCatcherForce = !!force;
-                $.global.__TLH_refocusKeyCatcher = focusKeyCatcher;
-                app.scheduleTask('$.global.__TLH_refocusKeyCatcher && $.global.__TLH_refocusKeyCatcher($.global.__TLH_refocusKeyCatcherForce); $.global.__TLH_refocusKeyCatcherForce = false;', 40, false);
-            } catch (_) {
-                try { focusKeyCatcher(force); } catch (e) {}
-            }
-        }
-
         function handleKeyCatcherChange() {
             try {
                 var t = String(keyCatcher.text || "");
@@ -2278,7 +2466,12 @@ SCRIPTMETA-END
                     return;
                 }
 
-                if (nowTime() >= numericFieldTypingUntil) {
+                var typingInNumericField = false;
+                try {
+                    typingInNumericField = !!((weightEt && weightEt.active) || (outerEt && outerEt.active) || (innerEt && innerEt.active));
+                } catch (_) {}
+
+                if (!typingInNumericField) {
                     var key = getPolledKeyboardKey();
                     if (/^[0-9.]$/.test(key)) {
                         if (key !== lastPolledNumpadKey) {
@@ -2332,17 +2525,6 @@ SCRIPTMETA-END
             pal.onShortcutKey = handleNumpadLineSelection;
             pal.onKeyDown = handleNumpadLineSelection;
         } catch (_) {}
-        try {
-            pal.onActivate = function () {
-                schedulePaletteReturnResetBurst();
-            };
-        } catch (_) {}
-        try {
-            pal.addEventListener("mousedown", function (ev) {
-                try { if (isNumericFieldTarget(ev.target)) return; } catch (_) {}
-                schedulePaletteReturnResetBurst();
-            });
-        } catch (_) {}
         pal.__focusKeyCatcher = focusKeyCatcher;
         pal.__startKeyPolling = startKeyPolling;
 
@@ -2372,7 +2554,7 @@ SCRIPTMETA-END
             innerHChk.value = true;
             innerVChk.value = true;
             syncGridButtons();
-            refocusKeyCatcherSoon();
+            focusKeyCatcher();
         };
 
         btnClearTargets.onClick = function () {
@@ -2384,11 +2566,35 @@ SCRIPTMETA-END
             innerHChk.value = false;
             innerVChk.value = false;
             syncGridButtons();
-            refocusKeyCatcherSoon();
+            focusKeyCatcher();
         };
 
-        btnRun.onClick = function () {
+        function refreshCapturedSelection() {
+            // paletteは非モーダルなので、実行時点のドキュメント選択を取得できる。
+            // 最初の選択へ固定せず、セルを選び直すたびに対象を更新する。
+            var currentCells = getSelectedCells();
+            if (!currentCells || !currentCells.length) {
+                safeAlert("対象にする表セルを選択してから実行してください。");
+                return false;
+            }
+
+            CAPTURED_CELLS = currentCells;
+            var currentCheck = analyzeSelection();
+            if (!currentCheck.ok) {
+                safeAlert(currentCheck.reason || "選択セルの解析に失敗しました。");
+                return false;
+            }
+
+            try {
+                pal.text = "表罫線ヘルパー（選択 " + CAPTURED_CELLS.length + "セル）";
+            } catch (_) {}
+            return true;
+        }
+
+        function runOperation() {
+            if (!refreshCapturedSelection()) return;
             savePrefs(pal.__ui);
+            resetApplyStats();
             var ap, w, vals;
 
             // 線選択モード：下のチェックボックス／プレビューで選んだ線だけを処理
@@ -2405,7 +2611,8 @@ SCRIPTMETA-END
                     innerH: innerHChk.value,
                     innerV: innerVChk.value
                 }, w, ap);
-                refocusKeyCatcherSoon();
+                reportApplyStats();
+                focusKeyCatcher();
                 return;
             }
 
@@ -2416,7 +2623,8 @@ SCRIPTMETA-END
                 ap = getAppearance(pal.__ui);
                 if (!ap) return;
                 applyAll(w, ap);
-                refocusKeyCatcherSoon();
+                reportApplyStats();
+                focusKeyCatcher();
                 return;
             }
 
@@ -2426,7 +2634,8 @@ SCRIPTMETA-END
                 ap = getAppearance(pal.__ui);
                 if (!ap) return;
                 applyOuter(w, ap);
-                refocusKeyCatcherSoon();
+                reportApplyStats();
+                focusKeyCatcher();
                 return;
             }
 
@@ -2436,25 +2645,29 @@ SCRIPTMETA-END
                 ap = getAppearance(pal.__ui);
                 if (!ap) return;
                 applyInner(w, ap, "内部適用");
-                refocusKeyCatcherSoon();
+                reportApplyStats();
+                focusKeyCatcher();
                 return;
             }
 
             if (rbClearOuter.value) {
                 clearOuter();
-                refocusKeyCatcherSoon();
+                reportApplyStats();
+                focusKeyCatcher();
                 return;
             }
 
             if (rbClearInner.value) {
                 clearInner();
-                refocusKeyCatcherSoon();
+                reportApplyStats();
+                focusKeyCatcher();
                 return;
             }
 
             if (rbClearAll.value) {
                 clearAll();
-                refocusKeyCatcherSoon();
+                reportApplyStats();
+                focusKeyCatcher();
                 return;
             }
 
@@ -2464,10 +2677,21 @@ SCRIPTMETA-END
                 ap = getAppearance(pal.__ui);
                 if (!ap) return;
                 applyOuterInner(vals.outerValue, vals.innerValue, ap);
-                refocusKeyCatcherSoon();
+                reportApplyStats();
+                focusKeyCatcher();
                 return;
             }
+        }
+
+        btnRun.onClick = runOperation;
+        btnClose.onClick = function () {
+            try { pal.close(); } catch (_) {}
         };
+
+        try {
+            pal.defaultElement = btnRun;
+            pal.cancelElement = btnClose;
+        } catch (_) {}
 
         var prefs = loadPrefs();
         if (prefs) {
@@ -2497,7 +2721,12 @@ SCRIPTMETA-END
         } else {
             syncGridButtons();
         }
-        try { pal.onClose = function () { savePrefs(pal.__ui); }; } catch (e) {}
+        try {
+            pal.onClose = function () {
+                savePrefs(pal.__ui);
+                try { $.global.__TLH_palette = null; } catch (_) {}
+            };
+        } catch (e) {}
 
         return pal;
     }
@@ -2548,23 +2777,40 @@ SCRIPTMETA-END
     // =========================================================
     // Main
     // =========================================================
-    var pal = createPalette();
-    refillDropdowns(pal);
+    try {
+        // 起動時の選択を初期値として記録する。
+        // palette表示後は、実行ボタンを押すたびに現在の選択へ更新する。
+        CAPTURED_CELLS = getSelectedCells();
 
-    var sel = analyzeSelection();
-    if (!sel.ok) {
-        safeAlert("表セルを選択してからスクリプトを起動してください。");
+        var initialCheck = analyzeSelection();
+        if (!initialCheck.ok) {
+            alert("表罫線ヘルパー:\n" + (initialCheck.reason || "表セルを選択してからスクリプトを実行してください。"));
+        } else {
+            // 同じ専用エンジン内に旧パレットが残っていたら閉じる。
+            try {
+                if ($.global.__TLH_palette && $.global.__TLH_palette.visible) {
+                    $.global.__TLH_palette.close();
+                }
+            } catch (_) {}
+
+            var pal = createPalette();
+            $.global.__TLH_palette = pal;
+            refillDropdowns(pal);
+            pal.center();
+
+            // 常時 scheduleTask を回すテンキー監視は停止。
+            // クリック操作と通常のキーイベントは有効。
+            try {
+                if (pal.__focusKeyCatcher) pal.__focusKeyCatcher();
+            } catch (e) {}
+
+            pal.show();
+        }
+    } catch (fatalError) {
+        var msg = "表罫線ヘルパーで予期しないエラーが発生しました。\n\n";
+        try { msg += "エラー内容: " + fatalError + "\n"; } catch (_) {}
+        try { msg += "行番号: " + fatalError.line + "\n"; } catch (_) {}
+        try { msg += "ファイル: " + fatalError.fileName + "\n"; } catch (_) {}
+        alert(msg);
     }
-
-    pal.center();
-    pal.show();
-
-    try {
-        if (pal.__startKeyPolling) pal.__startKeyPolling();
-    } catch (e0) {}
-
-    try {
-        $.sleep(100);
-        if (pal.__focusKeyCatcher) pal.__focusKeyCatcher();
-    } catch (e) {}
 })();
