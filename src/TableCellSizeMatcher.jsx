@@ -173,18 +173,18 @@ SCRIPTMETA-END
     topInsetInput.characters = 8;
     insetRow1.add("statictext", undefined, "mm");
 
-    insetRow1.add("statictext", undefined, "　下:");
-    var bottomInsetInput = insetRow1.add("edittext", undefined, store.bottomInsetText || "");
-    bottomInsetInput.characters = 8;
+    insetRow1.add("statictext", undefined, "　左:");
+    var leftInsetInput = insetRow1.add("edittext", undefined, store.leftInsetText || "");
+    leftInsetInput.characters = 8;
     insetRow1.add("statictext", undefined, "mm");
 
     var insetRow2 = insetPanel.add("group");
     insetRow2.orientation = "row";
     insetRow2.alignChildren = ["left", "center"];
 
-    insetRow2.add("statictext", undefined, "左:");
-    var leftInsetInput = insetRow2.add("edittext", undefined, store.leftInsetText || "");
-    leftInsetInput.characters = 8;
+    insetRow2.add("statictext", undefined, "下:");
+    var bottomInsetInput = insetRow2.add("edittext", undefined, store.bottomInsetText || "");
+    bottomInsetInput.characters = 8;
     insetRow2.add("statictext", undefined, "mm");
 
     insetRow2.add("statictext", undefined, "　右:");
@@ -308,7 +308,6 @@ SCRIPTMETA-END
 
         messageText.text = "選択セルへ適用しました。";
         saveCurrentSettings();
-        alert("適用が完了しました。");
     };
 
     clearButton.onClick = function () {
